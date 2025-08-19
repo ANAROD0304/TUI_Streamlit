@@ -1,54 +1,77 @@
 import streamlit as st
-import os
+import pandas as pd
 from pathlib import Path
 
-# ---- DEBUG TEMPORAL ----
-ROOT = Path(__file__).parent.resolve()
-data_dir = ROOT / "data"
-st.sidebar.write("📁 Working dir:", os.getcwd())
-st.sidebar.write("📂 App dir:", str(ROOT))
-st.sidebar.write("📦 Contenido de 'data/':", list(data_dir.glob("*")) if data_dir.exists() else "NO EXISTE")
-# ---- FIN DEBUG ----
+st.set_page_config(page_title="Formulario y Explorador", page_icon="🧭")
 
+# --------- util: leer en raíz o en data/ ---------
+def read_any(filename, **kwargs):
+    candidates = [Path(filename), Path("data") / filename]
+    for p in candidates:
+        if p.exists():
+            return pd.read_csv(p, **kwargs)
+    st.warning(f"Archivo no encontrado: {filename} (busqué en {candidates[0]} y {candidates[1]})")
+    return None
 
-import streamlit as st
-import pandas as pd
-
-# --- Cabecera de la app ---
+# --------- formulario (para cliente) ----------
 st.title("Formulario de Cliente")
-st.write("Por favor, completa la siguiente información para personalizar tu experiencia.")
+st.write("Completa la información para personalizar la experiencia.")
 
-# --- Preguntas al usuario ---
 name = st.text_input("Nombre completo")
 age = st.number_input("Edad", min_value=0, max_value=120, step=1)
 country = st.text_input("País de residencia")
 interests = st.selectbox(
     "¿Qué tipo de experiencia prefieres?",
-    ["Aventura", "Cultural", "Gastronomía", "Relax", "Otra"]
+    ["Cultural", "Aventura", "Gastronomía", "Relax", "Otra"]
 )
 
-# Mostrar resultados solo si el usuario completó todo
 if name and age and country:
-    st.subheader("Resumen de tus respuestas")
+    st.subheader("Resumen")
     st.write(f"**Nombre:** {name}")
     st.write(f"**Edad:** {age}")
     st.write(f"**País:** {country}")
     st.write(f"**Preferencia:** {interests}")
 
-# --- Cargar datasets ---
-experiences = pd.read_csv("data/Experience_Catalog_Complete.csv")
-upsells = pd.read_csv("data/upsell_linkage_data.csv")
+st.divider()
 
-st.title("Explorador de Experiencias")
+# --------- datos (se cargan desde RAÍZ o data/) ----------
+experiences = read_any("Experience_Catalog_Complete.csv")
+upsells     = read_any("upsell_linkage_data.csv")
 
-# Exploración de experiencias
-exp_choice = st.selectbox("Elige una experiencia", experiences["Experience_Name"].unique())
-st.write("Detalles de la experiencia seleccionada:")
-st.dataframe(experiences[experiences["Experience_Name"] == exp_choice])
+st.header("Explorador de Experiencias")
 
-# Ejemplo de gráfico con upsells
+if experiences is not None:
+    # Evitar columna inexistente por nombre distinto
+    exp_name_col = None
+    for c in experiences.columns:
+        if c.lower() in ("experience_name", "experience", "name"):
+            exp_name_col = c
+            break
+    if exp_name_col is None:
+        st.error("No encontré la columna de nombre de experiencia (ej.: 'Experience_Name').")
+    else:
+        exp_choice = st.selectbox(
+            "Elige una experiencia",
+            sorted(experiences[exp_name_col].dropna().unique())
+        )
+        st.write("Detalles seleccionados:")
+        st.dataframe(experiences[experiences[exp_name_col] == exp_choice].head(50))
+else:
+    st.info("Sube o deja en el repo el archivo Experience_Catalog_Complete.csv")
+
 st.subheader("Upsells más frecuentes")
-st.bar_chart(upsells["upsell_id"].value_counts())
-
+if upsells is not None:
+    # Usar una columna razonable si existe
+    count_col = None
+    for c in upsells.columns:
+        if c.lower() in ("upsell_id","upsell","id"):
+            count_col = c
+            break
+    if count_col:
+        st.bar_chart(upsells[count_col].value_counts())
+    else:
+        st.info("No encontré una columna tipo 'upsell_id' para graficar.")
+else:
+    st.info("Sube o deja en el repo el archivo upsell_linkage_data.csv")
 
 
