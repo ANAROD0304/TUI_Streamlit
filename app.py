@@ -2,152 +2,140 @@ import streamlit as st
 import pandas as pd
 from pathlib import Path
 
-st.set_page_config(page_title="Explorador TUI", page_icon="🧭", layout="wide")
+st.set_page_config(page_title="Experiencias por ciudad", page_icon="🧭", layout="wide")
 
 # ---------- util: leer en raíz o en data/ ----------
 def read_any(filename, **kwargs):
     for p in [Path(filename), Path("data")/filename]:
         if p.exists():
             return pd.read_csv(p, **kwargs)
-    return None
-
-def pick_col(df: pd.DataFrame, candidates):
-    lc = {c.lower(): c for c in df.columns}
-    for cand in candidates:
-        if cand in lc:
-            return lc[cand]
-    return None
-
-@st.cache_data
-def load_data():
-    experiences = read_any("Experience_Catalog_Complete.csv")
-    upsells     = read_any("upsell_linkage_data.csv")
-    return experiences, upsells
-
-exp_df, ups_df = load_data()
-
-st.title("Explorador de Experiencias")
-
-# ===================== 1) DATOS (primero) =====================
-colL, colR = st.columns([1,1])
-
-with colL:
-    st.subheader("📂 Experience_Catalog_Complete.csv")
-    if exp_df is None:
-        st.error("No encuentro **Experience_Catalog_Complete.csv** (en raíz ni en `data/`).")
-    else:
-        st.caption(f"{exp_df.shape[0]:,} filas × {exp_df.shape[1]} columnas")
-        st.dataframe(exp_df.head(50), use_container_width=True)
-
-with colR:
-    st.subheader("📂 upsell_linkage_data.csv")
-    if ups_df is None:
-        st.error("No encuentro **upsell_linkage_data.csv** (en raíz ni en `data/`).")
-    else:
-        st.caption(f"{ups_df.shape[0]:,} filas × {ups_df.shape[1]} columnas")
-        st.dataframe(ups_df.head(50), use_container_width=True)
-
-if exp_df is None and ups_df is None:
+    st.error(f"❌ No encontré {filename}. Sube el archivo a la raíz o a /data.")
     st.stop()
 
+def pick_col(df: pd.DataFrame, candidates):
+    """Devuelve el nombre real de la primera columna que coincida (insensible a mayúsculas)."""
+    lookup = {c.lower(): c for c in df.columns}
+    for c in candidates:
+        if c.lower() in lookup:
+            return lookup[c.lower()]
+    return None
+
+# ---------- Carga de datos ----------
+exp_df = read_any("Experience_Catalog_Complete.csv")
+
+# Detectar columnas clave (ajusta/añade alternativas si tus nombres son otros)
+COL_CITY    = pick_col(exp_df, ["city","ciudad","destino","location","municipio"])
+COL_NAME    = pick_col(exp_df, ["experience_name","name","title","experience"])
+COL_CAT     = pick_col(exp_df, ["category","type","segment","experience_type"])
+COL_PRICE   = pick_col(exp_df, ["price","precio","avg_price","amount","cost"])
+COL_RATING  = pick_col(exp_df, ["rating","score","valoracion","review_score"])
+
+if not (COL_CITY and COL_NAME):
+    st.error("Necesito al menos las columnas de **ciudad** y **nombre de experiencia** en el catálogo.")
+    st.write("Columnas del archivo:", list(exp_df.columns))
+    st.stop()
+
+st.title("Encuentra experiencias por ciudad")
+
+# ========== BARRA LATERAL: Filtros ==========
+st.sidebar.header("Filtros")
+city_text = st.sidebar.text_input("Ciudad destino", placeholder="Ej.: Valencia, Sevilla, Bilbao…")
+
+# Propuestas rápidas (por si no sabe la ortografía exacta)
+suggestions = sorted(x for x in exp_df[COL_CITY].dropna().astype(str).unique())[:2000]  # recorte por si es enorme
+if not city_text:
+    city_quick = st.sidebar.selectbox("O elige una ciudad", ["(sin selección)"] + suggestions)
+    if city_quick != "(sin selección)":
+        city_text = city_quick
+
+# Filtros opcionales si existen
+cat_options = sorted(exp_df[COL_CAT].dropna().astype(str).unique()) if COL_CAT else []
+cats_sel = st.sidebar.multiselect("Categorías", cat_options) if cat_options else []
+
+if COL_PRICE and pd.api.types.is_numeric_dtype(pd.to_numeric(exp_df[COL_PRICE], errors="coerce")):
+    price_min = float(pd.to_numeric(exp_df[COL_PRICE], errors="coerce").min())
+    price_max = float(pd.to_numeric(exp_df[COL_PRICE], errors="coerce").max())
+    price_range = st.sidebar.slider("Rango de precio", min_value=0.0,
+                                    max_value=max(10.0, round(price_max, 2)),
+                                    value=(0.0, max(10.0, round(price_max, 2))))
+else:
+    price_range = None
+
+if COL_RATING and pd.api.types.is_numeric_dtype(pd.to_numeric(exp_df[COL_RATING], errors="coerce")):
+    min_rating = st.sidebar.slider("Puntuación mínima", 0.0, 5.0, 0.0, 0.1)
+else:
+    min_rating = None
+
+st.sidebar.caption("Consejo: escribe parte del nombre de la ciudad (ej. “valen”)")
+
+# ========== FILTRADO ==========
+df = exp_df.copy()
+# filtro por ciudad (contiene, insensible a mayúsculas/acentos básicos)
+if city_text:
+    df = df[df[COL_CITY].astype(str).str.contains(city_text, case=False, na=False)]
+
+# filtros extra
+if cats_sel and COL_CAT:
+    df = df[df[COL_CAT].astype(str).isin(cats_sel)]
+
+if price_range and COL_PRICE:
+    p = pd.to_numeric(df[COL_PRICE], errors="coerce")
+    df = df[(p >= price_range[0]) & (p <= price_range[1])]
+
+if min_rating is not None and COL_RATING:
+    r = pd.to_numeric(df[COL_RATING], errors="coerce")
+    df = df[r >= min_rating]
+
+# ========== KPI y tabla amigable ==========
+left, right = st.columns([1,1])
+
+with left:
+    st.subheader("Resumen")
+    st.metric("Experiencias encontradas", f"{len(df):,}")
+    if COL_CAT:
+        top_cat = df[COL_CAT].value_counts().head(3)
+        if not top_cat.empty:
+            st.write("Top categorías:")
+            for idx, val in top_cat.items():
+                st.write(f"- {idx}: {val}")
+
+with right:
+    if COL_PRICE and not df.empty:
+        p = pd.to_numeric(df[COL_PRICE], errors="coerce")
+        st.metric("Precio medio (filtrado)", f"{p.mean():.2f}" if p.notna().any() else "—")
+    if COL_RATING and not df.empty:
+        r = pd.to_numeric(df[COL_RATING], errors="coerce")
+        st.metric("Puntuación media", f"{r.mean():.2f}" if r.notna().any() else "—")
+
 st.divider()
 
-# ===================== 2) ESTADÍSTICAS CON VALOR =====================
-st.header("Indicadores clave")
+# Selección de columnas limpias para mostrar
+nice_cols = [c for c in [COL_NAME, COL_CITY, COL_CAT, COL_PRICE, COL_RATING] if c]
+extra_cols = [c for c in df.columns if c not in nice_cols][:3]  # añade 3 columnas más como apoyo (sin códigos raros)
 
-# --- detectar columnas útiles en experiencias ---
-exp_name = exp_city = exp_cat = exp_price = exp_rating = None
-if exp_df is not None:
-    exp_name   = pick_col(exp_df, ["experience_name","name","title"])
-    exp_city   = pick_col(exp_df, ["city","destino","location","municipio"])
-    exp_cat    = pick_col(exp_df, ["category","type","segment","experience_type"])
-    exp_price  = pick_col(exp_df, ["price","precio","cost","amount","avg_price"])
-    exp_rating = pick_col(exp_df, ["rating","score","valoracion"])
+table = df[nice_cols + extra_cols].rename(columns={
+    COL_NAME: "Experiencia",
+    COL_CITY: "Ciudad",
+    COL_CAT: "Categoría",
+    COL_PRICE: "Precio",
+    COL_RATING: "Puntuación"
+})
 
-# --- detectar columnas útiles en upsells ---
-ups_id    = ups_amount = ups_conv = None
-if ups_df is not None:
-    ups_id    = pick_col(ups_df, ["upsell_id","upsell","id"])
-    ups_amount= pick_col(ups_df, ["amount","price","precio","revenue","importe"])
-    ups_conv  = pick_col(ups_df, ["purchased","converted","is_sold","sold","bought"])
-
-# KPIs
-m1, m2, m3, m4 = st.columns(4)
-
-# KPI 1: nº experiencias
-if exp_df is not None:
-    m1.metric("Experiencias en catálogo", f"{len(exp_df):,}")
+st.subheader("Resultados")
+if city_text and table.empty:
+    st.warning("No se encontraron experiencias para esa ciudad con los filtros actuales.")
 else:
-    m1.metric("Experiencias en catálogo", "—")
+    st.dataframe(table.head(200), use_container_width=True)
 
-# KPI 2: nº ciudades
-if exp_df is not None and exp_city:
-    m2.metric("Ciudades disponibles", f"{exp_df[exp_city].nunique():,}")
-else:
-    m2.metric("Ciudades disponibles", "—")
+# Botón de descarga
+if not table.empty:
+    st.download_button(
+        "Descargar resultados (CSV)",
+        data=table.to_csv(index=False).encode("utf-8"),
+        file_name="experiencias_filtradas.csv",
+        mime="text/csv"
+    )
 
-# KPI 3: precio medio (si existe)
-if exp_df is not None and exp_price and pd.api.types.is_numeric_dtype(exp_df[exp_price]):
-    m3.metric("Precio medio (catálogo)", f"{exp_df[exp_price].mean():.2f}")
-else:
-    m3.metric("Precio medio (catálogo)", "—")
-
-# KPI 4: conversión upsell o total upsells
-if ups_df is not None and ups_conv and ups_df[ups_conv].dropna().isin([1,True,"true","True","YES","Yes"]).any():
-    conv = (ups_df[ups_conv].astype(str).str.lower().isin(["1","true","yes","y","si","sí"])).mean()*100
-    m4.metric("Conversión de upsells", f"{conv:.1f}%")
-elif ups_df is not None and ups_id:
-    m4.metric("Total de eventos de upsell", f"{len(ups_df):,}")
-else:
-    m4.metric("Upsells", "—")
-
-st.divider()
-
-# ===================== 3) GRÁFICOS RESUMEN =====================
-gL, gR = st.columns(2)
-
-with gL:
-    st.subheader("Top categorías / tipos")
-    if exp_df is not None and exp_cat:
-        top_cat = exp_df[exp_cat].fillna("Sin categoría").value_counts().head(12)
-        st.bar_chart(top_cat)
-    elif exp_df is not None and exp_name:
-        top_exp = exp_df[exp_name].fillna("—").value_counts().head(12)
-        st.bar_chart(top_exp)
-    else:
-        st.info("No se detectó columna de categoría ni de nombre para agrupar.")
-
-with gR:
-    st.subheader("Top upsells por frecuencia")
-    if ups_df is not None and ups_id:
-        st.bar_chart(ups_df[ups_id].fillna("—").value_counts().head(12))
-    else:
-        st.info("No se detectó columna identificadora de upsell.")
-
-st.divider()
-
-# ===================== 4) Exploración puntual =====================
-st.header("Detalle por experiencia")
-if exp_df is not None:
-    # Si no encontramos columna de nombre, deja elegir cualquier columna de texto
-    if not exp_name:
-        text_cols = [c for c in exp_df.columns if exp_df[c].dtype == "object"]
-        if text_cols:
-            exp_name = st.selectbox(
-                "No pude detectar el nombre. Selecciona la columna a usar como 'nombre' 👇",
-                text_cols
-            )
-        else:
-            st.warning("No hay columnas de texto para usar como nombre.")
-    if exp_name:
-        choice = st.selectbox(
-            "Elige una experiencia",
-            sorted(exp_df[exp_name].dropna().astype(str).unique())
-        )
-        st.dataframe(exp_df[exp_name].astype(str).eq(choice))
-        st.dataframe(exp_df[exp_df[exp_name].astype(str) == choice].head(100), use_container_width=True)
-    else:
-        st.info("No se pudo configurar un campo de nombre para explorar el detalle.")
 
 
 
