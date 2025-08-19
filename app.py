@@ -1,4 +1,17 @@
 import streamlit as st
+import os
+from pathlib import Path
+
+# ---- DEBUG TEMPORAL ----
+ROOT = Path(__file__).parent.resolve()
+data_dir = ROOT / "data"
+st.sidebar.write("📁 Working dir:", os.getcwd())
+st.sidebar.write("📂 App dir:", str(ROOT))
+st.sidebar.write("📦 Contenido de 'data/':", list(data_dir.glob("*")) if data_dir.exists() else "NO EXISTE")
+# ---- FIN DEBUG ----
+
+
+import streamlit as st
 import pandas as pd
 
 # --- Cabecera de la app ---
